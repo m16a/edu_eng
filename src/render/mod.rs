@@ -10,4 +10,9 @@ impl Render {
    pub fn update(&mut self){
       println!("Render updating");
    }
+
+   pub fn test_method(&self){
+      println!("Render test method");
+   }
+   
 }
