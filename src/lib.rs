@@ -1,6 +1,8 @@
 mod render;
 use render::Render;
 
+pub mod utils;
+
 mod ecs;
 use ecs::{ECS, Component};
 
