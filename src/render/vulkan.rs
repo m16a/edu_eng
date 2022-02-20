@@ -8,7 +8,8 @@ use ash::vk::{self, API_VERSION_1_2};
 use ash::vk::{version_major, version_minor, version_patch};
 
 use std::ffi::{CStr, CString};
-use std::os::raw::c_void;
+use std::os::raw::{c_void, c_char};
+
 use std::ptr;
 
 const WINDOW_TITLE: &'static str = "edu";
@@ -63,6 +64,8 @@ pub struct Vulkan {
 	debug_utils_loader: ash::extensions::ext::DebugUtils,
 	debug_messanger: vk::DebugUtilsMessengerEXT,
 	_physical_device: vk::PhysicalDevice,
+	device: ash::Device,
+	_graphics_queue: vk::Queue,
 }
 
 impl Vulkan {
@@ -72,8 +75,13 @@ impl Vulkan {
 		let entry = ash::Entry::new().unwrap();
 		let instance = Vulkan::create_instance(&entry);
 		let (debug_utils_loader, debug_messanger) = Vulkan::setup_debug_utils(&entry, &instance);
-		let physcial_device = Vulkan::pick_physical_device(&instance);
-		Vulkan{_entry : entry, instance, debug_utils_loader, debug_messanger, _physical_device : physcial_device}
+		let physical_device = Vulkan::pick_physical_device(&instance);
+		let (logical_device, graphics_queue) =
+            Vulkan::create_logical_device(&instance, physical_device, &VALIDATION);
+		Vulkan{_entry : entry, instance, debug_utils_loader, debug_messanger, _physical_device : physical_device,
+			device: logical_device,
+			_graphics_queue: graphics_queue,
+		}
 		}
 	}
 
@@ -283,6 +291,70 @@ impl Vulkan {
 	
 		queue_family_indices
 	    }
+
+	    fn create_logical_device(
+		instance: &ash::Instance,
+		physical_device: vk::PhysicalDevice,
+		validation: &ValidationInfo,
+	    ) -> (ash::Device, vk::Queue) {
+		let indices = Vulkan::find_queue_family(instance, physical_device);
+	
+		let queue_priorities = [1.0_f32];
+		let queue_create_info = vk::DeviceQueueCreateInfo {
+		    s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
+		    p_next: ptr::null(),
+		    flags: vk::DeviceQueueCreateFlags::empty(),
+		    queue_family_index: indices.graphics_family.unwrap(),
+		    p_queue_priorities: queue_priorities.as_ptr(),
+		    queue_count: queue_priorities.len() as u32,
+		};
+	
+		let physical_device_features = vk::PhysicalDeviceFeatures {
+		    ..Default::default() // default just enable no feature.
+		};
+	
+		let requred_validation_layer_raw_names: Vec<CString> = validation
+		    .required_validation_layers
+		    .iter()
+		    .map(|layer_name| CString::new(*layer_name).unwrap())
+		    .collect();
+		let enable_layer_names: Vec<*const c_char> = requred_validation_layer_raw_names
+		    .iter()
+		    .map(|layer_name| layer_name.as_ptr())
+		    .collect();
+	
+		let device_create_info = vk::DeviceCreateInfo {
+		    s_type: vk::StructureType::DEVICE_CREATE_INFO,
+		    p_next: ptr::null(),
+		    flags: vk::DeviceCreateFlags::empty(),
+		    queue_create_info_count: 1,
+		    p_queue_create_infos: &queue_create_info,
+		    enabled_layer_count: if validation.is_enable {
+			enable_layer_names.len()
+		    } else {
+			0
+		    } as u32,
+		    pp_enabled_layer_names: if validation.is_enable {
+			enable_layer_names.as_ptr()
+		    } else {
+			ptr::null()
+		    },
+		    enabled_extension_count: 0,
+		    pp_enabled_extension_names: ptr::null(),
+		    p_enabled_features: &physical_device_features,
+		};
+	
+		let device: ash::Device = unsafe {
+		    instance
+			.create_device(physical_device, &device_create_info, None)
+			.expect("Failed to create logical Device!")
+		};
+	
+		let graphics_queue = unsafe { device.get_device_queue(indices.graphics_family.unwrap(), 0) };
+	
+		(device, graphics_queue)
+	    }
+
 	    #[allow(dead_code)]
 	    fn check_validation_layer_support(entry: &ash::Entry) -> bool {
 		// if support validation layer, then return true
@@ -362,6 +434,7 @@ fn populate_debug_messenger_create_info() -> vk::DebugUtilsMessengerCreateInfoEX
     impl Drop for Vulkan {
 	fn drop(&mut self) {
 	    unsafe {
+		self.device.destroy_device(None);
 		if VALIDATION.is_enable {
 		    self.debug_utils_loader
 			.destroy_debug_utils_messenger(self.debug_messanger, None);
